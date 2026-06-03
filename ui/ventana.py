@@ -6,8 +6,10 @@ from config import *
 from ui.drop_zone    import DropZone
 from ui.lista_audios import ListaAudios
 from ui.transcriptor import Transcriptor
+from ui.procesador   import Procesador
 from utils.archivos  import procesar_paths
 from ui.ventana_patrones.ventana_principal import VentanaPatrones
+from db.repositorios.transcripciones import TranscripcionesRepo
 import os
 
 
@@ -19,13 +21,15 @@ class Ventana(TkinterDnD.Tk):
         self.minsize(700, 560)
         self.configure(bg=BG_DARK)
 
-        self.audios: dict  = {}
-        self._transcriptor = Transcriptor()
-        self._fuentes      = self._crear_fuentes()
+        self.audios: dict      = {}
+        self._transcriptor     = Transcriptor()
+        self._procesador       = Procesador()
+        self._fuentes          = self._crear_fuentes()
         self._total_pendientes = 0
         self._completados      = 0
+        self._reportes         = []   # lista de resultados procesados
         self._build()
-        # Centrar ventana principal
+
         self.update_idletasks()
         x = (self.winfo_screenwidth()  // 2) - (880 // 2)
         y = (self.winfo_screenheight() // 2) - (680 // 2)
@@ -99,7 +103,7 @@ class Ventana(TkinterDnD.Tk):
         footer = tk.Frame(self, bg=BG_DARK)
         footer.pack(fill=tk.X, padx=24, pady=(8, 10))
 
-        # ── Fila superior: estado + botón ──
+        # ── Fila superior: estado + botones ──
         fila_top = tk.Frame(footer, bg=BG_DARK)
         fila_top.pack(fill=tk.X)
 
@@ -113,25 +117,50 @@ class Ventana(TkinterDnD.Tk):
                                        bg=BG_DARK, fg=ACCENT_BLUE)
         self.lbl_porcentaje.pack(side=tk.LEFT, padx=(10, 0))
 
-        # Botón Gestión de Patrones
+        # ── Botón Ver Reportes ──
+        self.btn_ver_reportes = tk.Label(
+            fila_top, text="📄  Ver Reportes",
+            font=self._fuentes["label"],
+            bg=ACCENT_GREEN, fg="white",
+            padx=16, pady=8, cursor="hand2"
+        )
+        self.btn_ver_reportes.bind("<Button-1>", lambda e: self._abrir_reportes())
+        self.btn_ver_reportes.bind("<Enter>",    lambda e: self.btn_ver_reportes.configure(bg="#5dd879"))
+        self.btn_ver_reportes.bind("<Leave>",    lambda e: self.btn_ver_reportes.configure(bg=ACCENT_GREEN))
+        # Se muestra/oculta con _actualizar_btn_reportes()
+
+        # ── Botón Patrones ──
         btn_patrones = tk.Label(
             fila_top, text="⚙️  Patrones",
             font=self._fuentes["label"],
             bg="#6c5ce7", fg="white",
             padx=16, pady=8, cursor="hand2"
         )
-        btn_patrones.pack(side=tk.RIGHT, padx=(0, 16))
+        btn_patrones.pack(side=tk.RIGHT, padx=(0, 10))
         btn_patrones.bind("<Button-1>", lambda e: VentanaPatrones(self))
         btn_patrones.bind("<Enter>",    lambda e: btn_patrones.configure(bg="#8c7ae6"))
         btn_patrones.bind("<Leave>",    lambda e: btn_patrones.configure(bg="#6c5ce7"))
 
+        # ── Botón Procesar ──
+        self.btn_procesar = tk.Label(
+            fila_top, text="🧠  Procesar",
+            font=self._fuentes["label"],
+            bg=ACCENT_YELLOW, fg="#0d1117",
+            padx=16, pady=8, cursor="hand2"
+        )
+        self.btn_procesar.pack(side=tk.RIGHT, padx=(0, 10))
+        self.btn_procesar.bind("<Button-1>", lambda e: self._iniciar_procesamiento())
+        self.btn_procesar.bind("<Enter>",    lambda e: self._hover_procesar(True))
+        self.btn_procesar.bind("<Leave>",    lambda e: self._hover_procesar(False))
+
+        # ── Botón Transcribir ──
         self.btn_transcribir = tk.Label(
             fila_top, text=f"{ICONO_RAYO}  Transcribir",
             font=self._fuentes["label"],
             bg=ACCENT_BLUE, fg="white",
             padx=16, pady=8, cursor="hand2"
         )
-        self.btn_transcribir.pack(side=tk.RIGHT)
+        self.btn_transcribir.pack(side=tk.RIGHT, padx=(0, 10))
         self.btn_transcribir.bind("<Button-1>", lambda e: self._iniciar_transcripcion())
         self.btn_transcribir.bind("<Enter>",    lambda e: self._hover_btn(True))
         self.btn_transcribir.bind("<Leave>",    lambda e: self._hover_btn(False))
@@ -140,7 +169,6 @@ class Ventana(TkinterDnD.Tk):
         self.frame_progreso = tk.Frame(footer, bg=BG_DARK)
         self.frame_progreso.pack(fill=tk.X, pady=(8, 0))
 
-        # Estilo personalizado para la barra
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure("Radio.Horizontal.TProgressbar",
@@ -149,6 +177,13 @@ class Ventana(TkinterDnD.Tk):
                         bordercolor=BORDER,
                         lightcolor=ACCENT_BLUE,
                         darkcolor=ACCENT_BLUE,
+                        thickness=8)
+        style.configure("Proceso.Horizontal.TProgressbar",
+                        troughcolor=BG_CARD,
+                        background=ACCENT_YELLOW,
+                        bordercolor=BORDER,
+                        lightcolor=ACCENT_YELLOW,
+                        darkcolor=ACCENT_YELLOW,
                         thickness=8)
 
         self.barra_global = ttk.Progressbar(
@@ -161,7 +196,7 @@ class Ventana(TkinterDnD.Tk):
             value=0
         )
         self.barra_global.pack(fill=tk.X)
-        self.frame_progreso.pack_forget()  # oculta al inicio
+        self.frame_progreso.pack_forget()
 
     # ─── Acciones ─────────────────────────────────────────────────────────────
     def _abrir_archivos(self):
@@ -186,7 +221,8 @@ class Ventana(TkinterDnD.Tk):
                 "nombre":        os.path.basename(path),
                 "tamaño":        os.path.getsize(path),
                 "estado":        "pendiente",
-                "transcripcion": None
+                "transcripcion": None,
+                "informe":       None,
             }
         self.lista.actualizar(self.audios)
         self._actualizar_contador(resultado)
@@ -211,22 +247,20 @@ class Ventana(TkinterDnD.Tk):
 
     # ─── Transcripción ────────────────────────────────────────────────────────
     def _iniciar_transcripcion(self):
-        if self._transcriptor.ocupado:
+        if self._transcriptor.ocupado or self._procesador.ocupado:
             return
 
         pendientes = [p for p, i in self.audios.items()
                       if i.get("estado") == "pendiente"]
         if not pendientes:
-            self.lbl_estado.configure(
-                text="No hay audios pendientes", fg=ACCENT_YELLOW)
-            self.after(2500, lambda: self.lbl_estado.configure(
-                text="Listo", fg=TEXT_MUTED))
+            self._flash_estado("No hay audios pendientes", ACCENT_YELLOW)
             return
 
         self._total_pendientes = len(pendientes)
         self._completados      = 0
         self._btn_transcribir_estado(activo=False)
-        self._mostrar_barra_global(True)
+        self._btn_procesar_estado(activo=False)
+        self._mostrar_barra_global(True, estilo="Radio.Horizontal.TProgressbar")
         self._actualizar_barra_global(0)
 
         self._transcriptor.transcribir_pendientes(
@@ -263,6 +297,16 @@ class Ventana(TkinterDnD.Tk):
             self.audios[path]["estado"]        = "listo"
             self.audios[path]["transcripcion"] = texto
 
+            # Guardar en BD
+            try:
+                tid = TranscripcionesRepo.guardar_transcripcion(
+                    audio_path=path,
+                    texto=texto
+                )
+                self.audios[path]["transcripcion_id"] = tid
+            except Exception:
+                pass
+
         self._completados += 1
         pct = int((self._completados / self._total_pendientes) * 100)
         self._actualizar_barra_global(pct)
@@ -280,20 +324,102 @@ class Ventana(TkinterDnD.Tk):
             self._mostrar_barra_global(False)
         ])
         self._btn_transcribir_estado(activo=True)
+        self._btn_procesar_estado(activo=True)
 
-    def _actualizar_barra_global(self, valor: int):
-        self.barra_global.configure(value=valor)
-        if self._total_pendientes > 0:
-            self.lbl_porcentaje.configure(
-                text=f"{self._completados}/{self._total_pendientes}  {valor}%",
-                fg=ACCENT_BLUE)
+    # ─── Procesamiento ────────────────────────────────────────────────────────
+    def _iniciar_procesamiento(self):
+        if self._transcriptor.ocupado or self._procesador.ocupado:
+            return
 
-    def _mostrar_barra_global(self, mostrar: bool):
-        if mostrar:
-            self.frame_progreso.pack(fill=tk.X, pady=(8, 0))
+        procesables = [
+            p for p, i in self.audios.items()
+            if i.get("estado") == "listo"
+            and i.get("transcripcion")
+            and not i.get("informe")
+        ]
+        if not procesables:
+            self._flash_estado("No hay reportes listos para procesar", ACCENT_YELLOW)
+            return
+
+        self._total_pendientes = len(procesables)
+        self._completados      = 0
+        self._btn_transcribir_estado(activo=False)
+        self._btn_procesar_estado(activo=False)
+        self._mostrar_barra_global(True, estilo="Proceso.Horizontal.TProgressbar")
+        self._actualizar_barra_global(0)
+
+        self._procesador.procesar_pendientes(
+            audios       = self.audios,
+            on_inicio    = self._cb_proc_inicio,
+            on_progreso  = self._cb_proc_progreso,
+            on_terminado = self._cb_proc_terminado
+        )
+
+    def _cb_proc_inicio(self, path):
+        self.after(0, lambda: self._marcar_procesando_ia(path))
+
+    def _cb_proc_progreso(self, path, resultado, error=None):
+        self.after(0, lambda: self._marcar_resultado_ia(path, resultado, error))
+
+    def _cb_proc_terminado(self):
+        self.after(0, self._procesamiento_terminado)
+
+    def _marcar_procesando_ia(self, path):
+        if path in self.audios:
+            nombre = self.audios[path]["nombre"]
+            self.lbl_estado.configure(
+                text=f"🧠 Procesando con IA: {nombre}",
+                fg=ACCENT_YELLOW)
+
+    def _marcar_resultado_ia(self, path, resultado, error=None):
+        if path not in self.audios:
+            return
+        if resultado and not error:
+            self.audios[path]["informe"]   = resultado.get("informe", "")
+            self.audios[path]["resultado"] = resultado
+            self._reportes.append({
+                "path":             path,
+                "nombre_audio":     self.audios[path]["nombre"],
+                "transcripcion":    self.audios[path].get("transcripcion", ""),
+                "transcripcion_id": self.audios[path].get("transcripcion_id"),
+                "paciente_id":      None,
+                "resultado":        resultado,
+                "guardado":         False,
+            })
         else:
-            self.frame_progreso.pack_forget()
+            self.audios[path]["informe"] = f"[Error IA: {error}]"
 
+        self._completados += 1
+        pct = int((self._completados / self._total_pendientes) * 100)
+        self._actualizar_barra_global(pct)
+
+    def _procesamiento_terminado(self):
+        self._actualizar_barra_global(100)
+        total = len(self._reportes)
+        self.lbl_estado.configure(
+            text=f"{ICONO_OK} {total} reporte(s) procesado(s) — pulsa 'Ver Reportes'",
+            fg=ACCENT_GREEN)
+        self.lbl_porcentaje.configure(text="")
+        self._btn_transcribir_estado(activo=True)
+        self._btn_procesar_estado(activo=True)
+        self._actualizar_btn_reportes()          # siempre actualizar botón
+        self.after(500, lambda: self._mostrar_barra_global(False))
+        self.after(4000, lambda: self.lbl_estado.configure(text="Listo", fg=TEXT_MUTED))
+
+    def _actualizar_btn_reportes(self):
+        """Muestra u oculta el botón Ver Reportes según si hay reportes.""";
+        if self._reportes:
+            self.btn_ver_reportes.pack(side=tk.RIGHT, padx=(0, 10))
+        else:
+            self.btn_ver_reportes.pack_forget()
+
+    def _abrir_reportes(self):
+        if not self._reportes:
+            return
+        from ui.ventana_reportes import VentanaReportes
+        VentanaReportes(self, self._reportes)
+
+    # ─── Estados de botones ───────────────────────────────────────────────────
     def _btn_transcribir_estado(self, activo: bool):
         if activo:
             self.btn_transcribir.configure(
@@ -304,10 +430,44 @@ class Ventana(TkinterDnD.Tk):
                 bg="#2d333b", fg=TEXT_MUTED, cursor="arrow",
                 text=f"{ICONO_ESPERA}  Transcribiendo...")
 
+    def _btn_procesar_estado(self, activo: bool):
+        if activo:
+            self.btn_procesar.configure(
+                bg=ACCENT_YELLOW, fg="#0d1117", cursor="hand2",
+                text="🧠  Procesar")
+        else:
+            self.btn_procesar.configure(
+                bg="#2d333b", fg=TEXT_MUTED, cursor="arrow",
+                text=f"{ICONO_ESPERA}  Procesando...")
+
     def _hover_btn(self, entrar: bool):
         if not self._transcriptor.ocupado:
             self.btn_transcribir.configure(
                 bg="#4a9eff" if entrar else ACCENT_BLUE)
+
+    def _hover_procesar(self, entrar: bool):
+        if not self._procesador.ocupado:
+            self.btn_procesar.configure(
+                bg="#f0b429" if entrar else ACCENT_YELLOW)
+
+    def _flash_estado(self, texto, color):
+        self.lbl_estado.configure(text=texto, fg=color)
+        self.after(2500, lambda: self.lbl_estado.configure(text="Listo", fg=TEXT_MUTED))
+
+    # ─── Barra global ─────────────────────────────────────────────────────────
+    def _actualizar_barra_global(self, valor: int):
+        self.barra_global.configure(value=valor)
+        if self._total_pendientes > 0:
+            self.lbl_porcentaje.configure(
+                text=f"{self._completados}/{self._total_pendientes}  {valor}%",
+                fg=ACCENT_BLUE)
+
+    def _mostrar_barra_global(self, mostrar: bool, estilo: str = "Radio.Horizontal.TProgressbar"):
+        self.barra_global.configure(style=estilo)
+        if mostrar:
+            self.frame_progreso.pack(fill=tk.X, pady=(8, 0))
+        else:
+            self.frame_progreso.pack_forget()
 
     # ─── Contador ─────────────────────────────────────────────────────────────
     def _actualizar_contador(self, resultado: dict = None):

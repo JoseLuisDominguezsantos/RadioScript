@@ -6,7 +6,7 @@ from config import *
 from ui.drop_zone    import DropZone
 from ui.lista_audios import ListaAudios
 from ui.transcriptor import Transcriptor
-from ui.procesador   import Procesador
+from ui.procesador   import Procesador, leer_api_key, guardar_api_key
 from utils.archivos  import procesar_paths
 from ui.ventana_patrones.ventana_principal import VentanaPatrones
 from db.repositorios.transcripciones import TranscripcionesRepo
@@ -28,6 +28,7 @@ class Ventana(TkinterDnD.Tk):
         self._total_pendientes = 0
         self._completados      = 0
         self._reportes         = []   # lista de resultados procesados
+        self._modo_ia          = tk.StringVar(value="auto")
         self._build()
 
         self.update_idletasks()
@@ -128,6 +129,43 @@ class Ventana(TkinterDnD.Tk):
         self.btn_ver_reportes.bind("<Enter>",    lambda e: self.btn_ver_reportes.configure(bg="#5dd879"))
         self.btn_ver_reportes.bind("<Leave>",    lambda e: self.btn_ver_reportes.configure(bg=ACCENT_GREEN))
         # Se muestra/oculta con _actualizar_btn_reportes()
+
+        # ── Selector de IA ──
+        frame_ia = tk.Frame(fila_top, bg=BG_DARK)
+        frame_ia.pack(side=tk.RIGHT, padx=(0, 10))
+
+        tk.Label(frame_ia, text="IA:",
+                 font=self._fuentes["small"],
+                 bg=BG_DARK, fg=TEXT_MUTED).pack(side=tk.LEFT, padx=(0, 4))
+
+        for modo, texto, color in [
+            ("auto",     "Auto",     ACCENT_BLUE),
+            ("deepseek", "DeepSeek", "#6c5ce7"),
+            ("local",    "Local",    ACCENT_YELLOW),
+        ]:
+            rb = tk.Radiobutton(
+                frame_ia, text=texto,
+                variable=self._modo_ia, value=modo,
+                font=self._fuentes["small"],
+                bg=BG_DARK, fg=TEXT_MUTED,
+                selectcolor=BG_DARK,
+                activebackground=BG_DARK,
+                indicatoron=0,
+                padx=8, pady=4,
+                relief="flat",
+                cursor="hand2"
+            )
+            rb.pack(side=tk.LEFT, padx=1)
+
+        # Botón configurar key
+        btn_key = tk.Label(frame_ia, text="🔑",
+                           font=self._fuentes["small"],
+                           bg=BG_ITEM, fg=TEXT_MUTED,
+                           padx=6, pady=4, cursor="hand2")
+        btn_key.pack(side=tk.LEFT, padx=(4, 0))
+        btn_key.bind("<Button-1>", lambda e: self._configurar_key())
+        btn_key.bind("<Enter>",    lambda e: btn_key.configure(bg=BG_HOVER))
+        btn_key.bind("<Leave>",    lambda e: btn_key.configure(bg=BG_ITEM))
 
         # ── Botón Patrones ──
         btn_patrones = tk.Label(
@@ -350,6 +388,7 @@ class Ventana(TkinterDnD.Tk):
 
         self._procesador.procesar_pendientes(
             audios       = self.audios,
+            modo         = self._modo_ia.get(),
             on_inicio    = self._cb_proc_inicio,
             on_progreso  = self._cb_proc_progreso,
             on_terminado = self._cb_proc_terminado
@@ -405,6 +444,21 @@ class Ventana(TkinterDnD.Tk):
         self._actualizar_btn_reportes()          # siempre actualizar botón
         self.after(500, lambda: self._mostrar_barra_global(False))
         self.after(4000, lambda: self.lbl_estado.configure(text="Listo", fg=TEXT_MUTED))
+
+    def _configurar_key(self):
+        """Diálogo para ingresar/actualizar la API key de OpenRouter."""
+        from tkinter import simpledialog
+        key_actual = leer_api_key()
+        nueva_key = simpledialog.askstring(
+            "API Key — OpenRouter",
+            "Pega tu API key de OpenRouter (sk-or-...):\n"
+            "Obtenerla en: openrouter.ai/keys",
+            initialvalue=key_actual,
+            parent=self
+        )
+        if nueva_key and nueva_key.strip():
+            guardar_api_key(nueva_key.strip())
+            self._flash_estado("✅ API key guardada correctamente", ACCENT_GREEN)
 
     def _actualizar_btn_reportes(self):
         """Muestra u oculta el botón Ver Reportes según si hay reportes.""";

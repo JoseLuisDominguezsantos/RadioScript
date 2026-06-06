@@ -4,7 +4,8 @@ from tkinter import ttk
 from ui.ventana_patrones.panel_estudios   import PanelEstudios
 from ui.ventana_patrones.panel_hallazgos  import PanelHallazgos
 from ui.ventana_patrones.panel_plantillas  import PanelPlantillas
-from ui.ventana_patrones.panel_vocabulario import PanelVocabulario
+from ui.ventana_patrones.panel_vocabulario    import PanelVocabulario
+from ui.ventana_patrones.panel_entrenamiento import PanelEntrenamiento
 from config import BG_DARK, BG_CARD, BORDER, TEXT_PRIMARY, TEXT_MUTED
 
 
@@ -100,6 +101,10 @@ class VentanaPatrones(tk.Toplevel):
         # Pestaña 3: Vocabulario
         self.panel_vocabulario = PanelVocabulario(self.notebook)
         self.notebook.add(self.panel_vocabulario, text="  🔤  Vocabulario  ")
+
+        # Pestaña 4: Entrenamiento
+        self.panel_entrenamiento = PanelEntrenamiento(self.notebook)
+        self.notebook.add(self.panel_entrenamiento, text="  🧠  Entrenamiento  ")
 
     def _al_seleccionar_estudio(self, tipo_id, tipo_nombre):
         self.panel_hallazgos.cargar_estudio(tipo_id, tipo_nombre)

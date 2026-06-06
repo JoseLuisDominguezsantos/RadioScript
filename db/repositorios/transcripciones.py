@@ -47,11 +47,13 @@ class InformesRepo:
 
     @staticmethod
     def guardar(transcripcion_id, paciente_id, contenido, plantilla_id=None):
+        # Cambiamos 'contenido' por 'texto_completo' en el INSERT
         sql = """
-            INSERT INTO informes (transcripcion_id, paciente_id, contenido, plantilla_id)
+            INSERT INTO informes (transcripcion_id, paciente_id, texto_completo, plantilla_id)
             VALUES (%s, %s, %s, %s)
         """
         cur = Conexion.cursor()
+        # Mantenemos la variable 'contenido' en la tupla porque es el nombre del parámetro en Python
         cur.execute(sql, (transcripcion_id, paciente_id, contenido, plantilla_id))
         nuevo_id = cur.lastrowid
         cur.close()

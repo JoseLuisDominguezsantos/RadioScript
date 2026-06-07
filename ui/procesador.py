@@ -112,62 +112,103 @@ def contar_ejemplos() -> dict:
 
 
 # ─── Prompt compartido ────────────────────────────────────────────────────────
+def _detectar_tipo_estudio(transcripcion: str, plantillas: list) -> dict | None:
+    """Detecta qué plantilla usar basándose en palabras clave de la transcripción."""
+    texto = transcripcion.upper()
+    # Mapa de palabras clave → tipo de estudio
+    keywords = {
+        "TORAX": ["TORAX", "TÓRAX", "PECHO", "PA"],
+        "ABDOMEN": ["ABDOMEN", "ABDOMINAL", "ABD"],
+        "CERVICAL": ["CERVICAL", "CUELLO", "COLUMNA CERVICAL"],
+        "DORSAL": ["DORSAL", "COLUMNA DORSAL", "DORSO"],
+        "LUMBAR": ["LUMBAR", "COLUMNA LUMBAR", "LUMBARES"],
+        "CRÁNEO": ["CRANEO", "CRÁNEO", "CRANEAL"],
+        "HOMBRO": ["HOMBRO", "CLAVICULA", "CLAVÍCULA"],
+        "CODO": ["CODO"],
+        "MANO": ["MANO", "CARPO", "METACARPO"],
+        "RODILLA": ["RODILLA"],
+        "PIE": ["PIE", "TARSO", "METATARSO"],
+        "TOBILLO": ["TOBILLO"],
+        "PIERNA": ["PIERNA", "TIBIA", "PERONÉ"],
+        "MUSLO": ["MUSLO", "FEMUR", "FÉMUR"],
+        "PELVIS": ["PELVIS", "CADERA", "COXOFEMORAL"],
+        "SENOS PARANASALES": ["SENOS", "PARANASALES", "SINUSAL"],
+        "HISTEROSALPINGOGRAFIA": ["HISTEROSALPINGOGRAFIA", "TROMPA", "UTERO", "ÚTERO"],
+    }
+    for tipo_key, words in keywords.items():
+        if any(w in texto for w in words):
+            for p in plantillas:
+                if tipo_key in p["tipo_estudio"].upper():
+                    return p
+    return None
+
+
 def _construir_prompt(transcripcion_original: str,
                       transcripcion_corregida: str,
                       plantillas: list,
                       ejemplos: list) -> str:
 
+    # Detectar plantilla más probable para reducir el contexto
+    plantilla_detectada = _detectar_tipo_estudio(transcripcion_corregida, plantillas)
+
     seccion_ejemplos = ""
     if ejemplos:
         alta = [e for e in ejemplos if e.get("calidad", 5) >= 7]
         norm = [e for e in ejemplos if e.get("calidad", 5) < 7]
-        seccion_ejemplos = "\nEJEMPLOS REALES (ordenados por importancia):\n"
-        if alta:
-            seccion_ejemplos += "\n--- EJEMPLOS CON CORRECCIONES DEL RADIÓLOGO ---\n"
-            for i, ej in enumerate(alta[:8], 1):
-                seccion_ejemplos += f"\nEjemplo {i}:\nTRANSCRIPCIÓN: {ej['transcripcion']}\nINFORME CORRECTO:\n{ej['informe_final']}\n"
-        if norm:
-            seccion_ejemplos += "\n--- EJEMPLOS ACEPTADOS SIN CAMBIOS ---\n"
-            for i, ej in enumerate(norm[:5], 1):
-                seccion_ejemplos += f"\nEjemplo {i}:\nTRANSCRIPCIÓN: {ej['transcripcion']}\nINFORME: {ej['informe_final']}\n"
+        seccion_ejemplos = "\nEJEMPLOS REALES:\n"
+        for i, ej in enumerate((alta[:5] + norm[:3]), 1):
+            seccion_ejemplos += f"\nEjemplo {i}:\nTRANSCRIPCIÓN: {ej['transcripcion']}\nINFORME:\n{ej['informe_final']}\n"
         seccion_ejemplos += "\n"
 
-    tipos_disponibles = "\n".join(f"- {p['tipo_estudio']}" for p in plantillas)
-    plantillas_texto  = ""
-    for p in plantillas:
-        plantillas_texto += f"\n=== {p['tipo_estudio']} ===\nTÉCNICA: {p['tecnica'] or ''}\nHALLAZGOS BASE:\n{p['hallazgos_base'] or ''}\nIMPRESIÓN DIAGNÓSTICA BASE:\n{p['conclusion_base'] or ''}\n---"
+    # Si detectamos la plantilla, solo enviamos esa + lista de tipos
+    # Si no, enviamos todas (fallback)
+    tipos_lista = "\n".join(f"- {p['tipo_estudio']}" for p in plantillas)
 
-    nota = f"\nTRANSCRIPCIÓN CORREGIDA:\n{transcripcion_corregida}\n" \
+    if plantilla_detectada:
+        p = plantilla_detectada
+        plantilla_ctx = f"""
+TIPO DETECTADO: {p["tipo_estudio"]}
+TÉCNICA: {p["tecnica"] or ""}
+HALLAZGOS BASE (patrón normal completo):
+{p["hallazgos_base"] or ""}
+IMPRESIÓN DIAGNÓSTICA BASE:
+{p["conclusion_base"] or ""}"""
+        instruccion_tipo = f'El tipo de estudio ES: {p["tipo_estudio"]}'
+    else:
+        plantilla_ctx = "\n".join(
+            f"=== {p['tipo_estudio']} ===\nTÉCNICA: {p['tecnica'] or ''}\nHALLAZGOS BASE:\n{p['hallazgos_base'] or ''}\n---"
+            for p in plantillas
+        )
+        instruccion_tipo = f"Detecta el tipo de estudio entre:\n{tipos_lista}"
+
+    nota = f"\nTRANSCRIPCIÓN CON TÉRMINOS CORREGIDOS:\n{transcripcion_corregida}\n" \
            if transcripcion_corregida != transcripcion_original else ""
 
-    return f"""Eres un experto en radiología médica. Genera un informe radiológico formal a partir de una transcripción de audio dictada por un médico.
+    return f"""Eres un experto en radiología médica. Genera un informe radiológico formal.
 {seccion_ejemplos}
-TIPOS DE ESTUDIO DISPONIBLES:
-{tipos_disponibles}
-
-PLANTILLAS BASE:
-{plantillas_texto}
+PLANTILLA A USAR:
+{plantilla_ctx}
 
 TRANSCRIPCIÓN DEL AUDIO:
 {transcripcion_original}
 {nota}
-REGLAS ESTRICTAS:
-1. Detecta el tipo de estudio mencionado por el médico.
-2. Usa la plantilla base como ESQUELETO — copia TODAS sus líneas.
-3. MODIFICA solo las líneas donde el médico dictó algo diferente al patrón normal.
+INSTRUCCIONES:
+1. {instruccion_tipo}
+2. Copia TODAS las líneas del patrón base tal como están.
+3. MODIFICA solo las líneas donde el médico dictó algo diferente.
 4. Extrae nombre del paciente y edad de la transcripción.
-5. IMPRESIÓN DIAGNÓSTICA: lista SOLO hallazgos ANORMALES.
-   Si todo normal → usa conclusión base exacta.
-   Si hay anormales → lista cada uno + "RESTO SIN ENCUENTROS REMARCABLES."
+5. IMPRESIÓN DIAGNÓSTICA: solo hallazgos ANORMALES que mencionó el médico.
+   Sin hallazgos anormales → usa la conclusión base exacta.
+   Con hallazgos anormales → lista cada uno + "RESTO SIN ENCUENTROS REMARCABLES."
 6. Todo en MAYÚSCULAS.
 
-Responde ÚNICAMENTE con JSON válido:
+JSON de respuesta (sin texto adicional):
 {{
-  "tipo_estudio": "tipo detectado",
+  "tipo_estudio": "tipo exacto",
   "nombre_paciente": "nombre o vacío",
   "edad": "edad o vacío",
   "fecha_estudio": "",
-  "informe": "informe completo con \\n para saltos de línea"
+  "informe": "informe con \\n para saltos de línea"
 }}"""
 
 
